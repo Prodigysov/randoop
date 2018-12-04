@@ -804,128 +804,129 @@ task updateUserOptions(dependsOn: 'assemble') {
   }
 }
 
-/* Requires that the html5validator program is installed */
-task html5validatorExists {
-    doLast {
-        def result = exec {
-            def command = "command -v html5validator"
-            ignoreExitValue = true
-            executable "bash" args "-l", "-c", command
-        }
-        if (result.getExitValue() != 0) {
-            ant.fail('html5validator is not installed.  See https://randoop.github.io/randoop/manual/dev.html#prerequisites .')
-        }
-    }
-}
+// PN: Commented-out to simplify building
+// /* Requires that the html5validator program is installed */
+// task html5validatorExists {
+//     doLast {
+//         def result = exec {
+//             def command = "command -v html5validator"
+//             ignoreExitValue = true
+//             executable "bash" args "-l", "-c", command
+//         }
+//         if (result.getExitValue() != 0) {
+//             ant.fail('html5validator is not installed.  See https://randoop.github.io/randoop/manual/dev.html#prerequisites .')
+//         }
+//     }
+// }
 
-/*
- * Configuration of manual task to generate/update and move documentation into
- * build/docs directory.
- */
-task manual(type: DefaultTask, dependsOn: [ 'updateUserOptions', 'updateUserTOC', 'updateDevTOC', 'html5validatorExists']) {
-  group 'Documentation'
-  description "Adds options and TOC to documentation in src/docs"
-  doLast {
-    exec {
-      if (JavaVersion.current().isJava8Compatible()) {
-        environment PATH: "$System.env.PATH"
-        commandLine "html5validator", "--root", file("${projectDir}/src/docs/manual")
-      } else {
-        commandLine "echo","WARNING: HTML validation of manuals is only run in Java 8+"
-      }
-    }
-  }
-}
+// /*
+//  * Configuration of manual task to generate/update and move documentation into
+//  * build/docs directory.
+//  */
+// task manual(type: DefaultTask, dependsOn: [ 'updateUserOptions', 'updateUserTOC', 'updateDevTOC', 'html5validatorExists']) {
+//   group 'Documentation'
+//   description "Adds options and TOC to documentation in src/docs"
+//   doLast {
+//     exec {
+//       if (JavaVersion.current().isJava8Compatible()) {
+//         environment PATH: "$System.env.PATH"
+//         commandLine "html5validator", "--root", file("${projectDir}/src/docs/manual")
+//       } else {
+//         commandLine "echo","WARNING: HTML validation of manuals is only run in Java 8+"
+//       }
+//     }
+//   }
+// }
 
-build.dependsOn manual
+// build.dependsOn manual
 
-/*
- * Applies HTML5 validator to API javadoc.
- * Note: prior to Java 9, javadoc does not comply with HTML5.
- */
-task validateAPI(type: Exec, dependsOn: ['javadoc', 'html5validatorExists']) {
-  group 'Documentation'
-  description "Run html5validator to find HTML errors in API documentation"
-  if (JavaVersion.current().isJava9Compatible()) {
-    environment PATH: "$System.env.PATH"
-    commandLine "html5validator", "--root", file("${buildDir}/docs/api")
-  } else {
-    commandLine "echo", "WARNING: HTML validation of API is only run in Java 9+"
-  }
-}
+// /*
+//  * Applies HTML5 validator to API javadoc.
+//  * Note: prior to Java 9, javadoc does not comply with HTML5.
+//  */
+// task validateAPI(type: Exec, dependsOn: ['javadoc', 'html5validatorExists']) {
+//   group 'Documentation'
+//   description "Run html5validator to find HTML errors in API documentation"
+//   if (JavaVersion.current().isJava9Compatible()) {
+//     environment PATH: "$System.env.PATH"
+//     commandLine "html5validator", "--root", file("${buildDir}/docs/api")
+//   } else {
+//     commandLine "echo", "WARNING: HTML validation of API is only run in Java 9+"
+//   }
+// }
 
 
-/*
- * WARNING: do not run this task unless you mean to wipe out the project pages
- * directory. It can be repopulated by publishSite, but the contents will be
- * based on changes to the files in src/docs and the Javadoc in the source.
- */
-task cleanSite {
-  group=null
-  description 'Removes all files from the project pages directory (CAUTION!)'
-  def siteDir = file("${projectDir}/docs")
-  def oldSiteFiles = fileTree(siteDir) {
-    exclude 'README.md'
-  }
-  doLast {
-    delete oldSiteFiles
-  }
-}
+// /*
+//  * WARNING: do not run this task unless you mean to wipe out the project pages
+//  * directory. It can be repopulated by publishSite, but the contents will be
+//  * based on changes to the files in src/docs and the Javadoc in the source.
+//  */
+// task cleanSite {
+//   group=null
+//   description 'Removes all files from the project pages directory (CAUTION!)'
+//   def siteDir = file("${projectDir}/docs")
+//   def oldSiteFiles = fileTree(siteDir) {
+//     exclude 'README.md'
+//   }
+//   doLast {
+//     delete oldSiteFiles
+//   }
+// }
 
-/*
- * Publishes changes to the project documentation to the project pages directory
- * (docs). This task ensures that all old site files are removed, new API
- * documentation is generated, the manual is updated, and the HTML has been
- * validated.
- *
- * Note that the contents of any subdirectory of build/docs will be included in
- * the site. Currently, this is only the api directory generated by the javadoc
- * task.
- *
- * All site files will be read-only.
- */
-task publishSite (dependsOn: ['cleanSite', 'javadoc', 'validateAPI', 'manual']) {
-  group 'Publishing'
-  description 'Publish changes to site files and javadoc to the project pages directory'
-  def siteDir = file("${projectDir}/docs")
-  def buildDocsDir = file("${buildDir}/docs") // include any built docs (e.g., api)
-  def newSiteFiles = fileTree("${projectDir}/src/docs") {
-    exclude 'README.md'
-    exclude 'api'
-  }
-  doLast {
-      copy {
-        from (buildDocsDir)  //copy api
-        from (newSiteFiles)
-        into siteDir
-        fileMode = Integer.parseInt("444", 8)
-      }
-  }
-}
+// /*
+//  * Publishes changes to the project documentation to the project pages directory
+//  * (docs). This task ensures that all old site files are removed, new API
+//  * documentation is generated, the manual is updated, and the HTML has been
+//  * validated.
+//  *
+//  * Note that the contents of any subdirectory of build/docs will be included in
+//  * the site. Currently, this is only the api directory generated by the javadoc
+//  * task.
+//  *
+//  * All site files will be read-only.
+//  */
+// task publishSite (dependsOn: ['cleanSite', 'javadoc', 'validateAPI', 'manual']) {
+//   group 'Publishing'
+//   description 'Publish changes to site files and javadoc to the project pages directory'
+//   def siteDir = file("${projectDir}/docs")
+//   def buildDocsDir = file("${buildDir}/docs") // include any built docs (e.g., api)
+//   def newSiteFiles = fileTree("${projectDir}/src/docs") {
+//     exclude 'README.md'
+//     exclude 'api'
+//   }
+//   doLast {
+//       copy {
+//         from (buildDocsDir)  //copy api
+//         from (newSiteFiles)
+//         into siteDir
+//         fileMode = Integer.parseInt("444", 8)
+//       }
+//   }
+// }
 
-/*
- * Applies HTML5 validator to project site HTML, including the manual
- */
-task validateSite(dependsOn: 'html5validatorExists') {
-  description "Run html5validator to find HTML errors in site files (excludes manual and api)"
-  if (JavaVersion.current().isJava8Compatible()) {
-    exec {
-      environment PATH: "$System.env.PATH"
-      commandLine "html5validator", "--root", "src/docs/", "--ignore", "src/docs/api"
-    }
-    exec {
-      environment PATH: "$System.env.PATH"
-      commandLine "html5validator", "--root", "docs/", "--ignore", "docs/api"
-    }
-  } else {
-    println "WARNING: HTML validation of site is only run in Java 8+"
-  }
-}
+// /*
+//  * Applies HTML5 validator to project site HTML, including the manual
+//  */
+// task validateSite(dependsOn: 'html5validatorExists') {
+//   description "Run html5validator to find HTML errors in site files (excludes manual and api)"
+//   if (JavaVersion.current().isJava8Compatible()) {
+//     exec {
+//       environment PATH: "$System.env.PATH"
+//       commandLine "html5validator", "--root", "src/docs/", "--ignore", "src/docs/api"
+//     }
+//     exec {
+//       environment PATH: "$System.env.PATH"
+//       commandLine "html5validator", "--root", "docs/", "--ignore", "docs/api"
+//     }
+//   } else {
+//     println "WARNING: HTML validation of site is only run in Java 8+"
+//   }
+// }
 
-task buildRelease(type: DefaultTask, dependsOn: [ 'assemble', 'check', 'publishSite', 'validateSite', 'distributionZip' ]) {
-  group 'Publishing'
-  description "Builds system and documentation, validates HTML, and publishes site"
-}
+// task buildRelease(type: DefaultTask, dependsOn: [ 'assemble', 'check', 'publishSite', 'validateSite', 'distributionZip' ]) {
+//   group 'Publishing'
+//   description "Builds system and documentation, validates HTML, and publishes site"
+// }
 
 /*************** Gradle Wrapper ******************/
 /* Declares the Gradle version to be used when the wrapper is built */
