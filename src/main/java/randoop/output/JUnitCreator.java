@@ -17,7 +17,9 @@ import com.github.javaparser.ast.body.TypeDeclaration;
 import com.github.javaparser.ast.body.VariableDeclarator;
 import com.github.javaparser.ast.body.VariableDeclaratorId;
 import com.github.javaparser.ast.expr.AnnotationExpr;
+import com.github.javaparser.ast.expr.ArrayAccessExpr;
 import com.github.javaparser.ast.expr.AssignExpr;
+import com.github.javaparser.ast.expr.BinaryExpr;
 import com.github.javaparser.ast.expr.BooleanLiteralExpr;
 import com.github.javaparser.ast.expr.Expression;
 import com.github.javaparser.ast.expr.FieldAccessExpr;
@@ -25,15 +27,20 @@ import com.github.javaparser.ast.expr.IntegerLiteralExpr;
 import com.github.javaparser.ast.expr.MarkerAnnotationExpr;
 import com.github.javaparser.ast.expr.MethodCallExpr;
 import com.github.javaparser.ast.expr.NameExpr;
+import com.github.javaparser.ast.expr.NullLiteralExpr;
 import com.github.javaparser.ast.expr.ObjectCreationExpr;
 import com.github.javaparser.ast.expr.SingleMemberAnnotationExpr;
-import com.github.javaparser.ast.expr.StringLiteralExpr;
+import com.github.javaparser.ast.expr.UnaryExpr;
 import com.github.javaparser.ast.expr.VariableDeclarationExpr;
 import com.github.javaparser.ast.stmt.BlockStmt;
 import com.github.javaparser.ast.stmt.CatchClause;
 import com.github.javaparser.ast.stmt.ExpressionStmt;
+import com.github.javaparser.ast.stmt.ForStmt;
 import com.github.javaparser.ast.stmt.IfStmt;
+import com.github.javaparser.ast.stmt.ReturnStmt;
 import com.github.javaparser.ast.stmt.Statement;
+import com.github.javaparser.ast.stmt.SwitchEntryStmt;
+import com.github.javaparser.ast.stmt.SwitchStmt;
 import com.github.javaparser.ast.stmt.TryStmt;
 import com.github.javaparser.ast.type.ClassOrInterfaceType;
 import com.github.javaparser.ast.type.PrimitiveType;
@@ -41,12 +48,17 @@ import com.github.javaparser.ast.type.ReferenceType;
 import com.github.javaparser.ast.type.VoidType;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+import org.apache.commons.lang3.tuple.Pair;
 import randoop.BugInRandoopException;
 import randoop.Globals;
 import randoop.sequence.ExecutableSequence;
@@ -251,6 +263,11 @@ public class JUnitCreator {
         bodyDeclarations.add(testMethod);
       }
     }
+
+    // PN: The following commented-out is for adding driver methods in the test class
+    // List<MethodDeclaration> driverMethods = createDriverMethods(Collections.singleton(testClassName));
+    // bodyDeclarations.addAll(driverMethods);
+
     classDeclaration.setMembers(bodyDeclarations);
     List<TypeDeclaration> types = new ArrayList<>();
     types.add(classDeclaration);
@@ -283,11 +300,13 @@ public class JUnitCreator {
     FieldAccessExpr field = new FieldAccessExpr(new NameExpr("System"), "out");
     MethodCallExpr call = new MethodCallExpr(field, "format");
 
-    List<Expression> arguments = new ArrayList<>();
-    arguments.add(new StringLiteralExpr("%n%s%n"));
-    arguments.add(new StringLiteralExpr(className + "." + methodName));
-    call.setArgs(arguments);
-    statements.add(new IfStmt(new NameExpr("debug"), new ExpressionStmt(call), null));
+    // PN: The following commented-out code is for debugging only
+    // // >> if (debug) System.out.format("%n%s%n", $className.$methodName); <<
+    // List<Expression> arguments = new ArrayList<>();
+    // arguments.add(new StringLiteralExpr("%n%s%n"));
+    // arguments.add(new StringLiteralExpr(className + "." + methodName));
+    // call.setArgs(arguments);
+    // statements.add(new IfStmt(new NameExpr("debug"), new ExpressionStmt(call), null));
 
     // TODO make sequence generate list of JavaParser statements
     String sequenceBlockString = "{ " + testSequence.toCodeString() + " }";
@@ -386,6 +405,25 @@ public class JUnitCreator {
       compilationUnit.setPackage(new PackageDeclaration(new NameExpr(packageName)));
     }
 
+    List<ImportDeclaration> imports = new ArrayList<>();
+    compilationUnit.setImports(imports);
+
+    List<MethodDeclaration> driverMethods = createDriverMethods(testClassNames);
+    List<BodyDeclaration> bodyDeclarations = new ArrayList<>(driverMethods);
+
+    ClassOrInterfaceDeclaration driverClass =
+        new ClassOrInterfaceDeclaration(Modifier.PUBLIC, false, driverName);
+    driverClass.setMembers(bodyDeclarations);
+
+    List<TypeDeclaration> types = new ArrayList<>();
+    types.add(driverClass);
+    compilationUnit.setTypes(types);
+    return compilationUnit.toString();
+  }
+
+  // Generates a main method and several sub methods, that invokes the tests in test classes.
+  private List<MethodDeclaration> createDriverMethods(Set<String> testClassNames) {
+    // >> public static void main(String... args) <<
     MethodDeclaration mainMethod =
         new MethodDeclaration(Modifier.PUBLIC | Modifier.STATIC, new VoidType(), "main");
     List<Parameter> parameters = new ArrayList<>();
@@ -398,87 +436,254 @@ public class JUnitCreator {
     mainMethod.getParameters().get(0).setVarArgs(true);
 
     List<Statement> bodyStatements = new ArrayList<>();
-    String failureVariableName = "hadFailure";
-    VariableDeclarator variableDecl =
+
+    // Reusable variables
+    VariableDeclarator variableDecl;
+    List<VariableDeclarator> variableList;
+    VariableDeclarationExpr variableExpr;
+
+    // Consider each test method isolated
+    List<Pair<String, String>> testClassMethodNames = new ArrayList<>();
+    for (String testClassName : testClassNames) {
+      int classMethodCount = classMethodCounts.get(testClassName);
+      NameGenerator methodGen = new NameGenerator("test", 1, numDigits(classMethodCount));
+      while (methodGen.nameCount() < classMethodCount) {
+        String testMethodName = methodGen.next();
+        testClassMethodNames.add(Pair.of(testClassName, testMethodName));
+      }
+    }
+
+    // >> int totalTests = #$testClassMethodNames; <<
+    String totalTestsVariableName = "totalTests";
+    variableDecl =
         new VariableDeclarator(
-            new VariableDeclaratorId(failureVariableName), new BooleanLiteralExpr(false));
-    List<VariableDeclarator> variableList = new ArrayList<>();
+            new VariableDeclaratorId(totalTestsVariableName),
+            new IntegerLiteralExpr(Integer.toString(testClassMethodNames.size())));
+    variableList = new ArrayList<>();
     variableList.add(variableDecl);
-    VariableDeclarationExpr variableExpr =
+    variableExpr =
+        new VariableDeclarationExpr(new PrimitiveType(PrimitiveType.Primitive.Int), variableList);
+    bodyStatements.add(new ExpressionStmt(variableExpr));
+
+    // >> int limitTests = totalTests; <<
+    String limitTestsVariableName = "limitTests";
+    variableDecl =
+        new VariableDeclarator(
+            new VariableDeclaratorId(limitTestsVariableName), new NameExpr(totalTestsVariableName));
+    variableList = new ArrayList<>();
+    variableList.add(variableDecl);
+    variableExpr =
+        new VariableDeclarationExpr(new PrimitiveType(PrimitiveType.Primitive.Int), variableList);
+    bodyStatements.add(new ExpressionStmt(variableExpr));
+
+    // >> boolean isIsolated = true; <<
+    String isIsolatedVariableName = "isIsolated";
+    variableDecl =
+        new VariableDeclarator(
+            new VariableDeclaratorId(isIsolatedVariableName), new BooleanLiteralExpr(true));
+    variableList = new ArrayList<>();
+    variableList.add(variableDecl);
+    variableExpr =
         new VariableDeclarationExpr(
             new PrimitiveType(PrimitiveType.Primitive.Boolean), variableList);
     bodyStatements.add(new ExpressionStmt(variableExpr));
 
-    NameGenerator instanceNameGen = new NameGenerator("t");
-    for (String testClass : testClassNames) {
-      if (beforeAllBody != null) {
-        bodyStatements.add(
-            new ExpressionStmt(new MethodCallExpr(new NameExpr(testClass), BEFORE_ALL_METHOD)));
-      }
+    // >> int threadId = -1; <<
+    String threadIdVariableName = "threadId";
+    variableDecl =
+        new VariableDeclarator(
+            new VariableDeclaratorId(threadIdVariableName),
+            new IntegerLiteralExpr(Integer.toString(-1)));
+    variableList = new ArrayList<>();
+    variableList.add(variableDecl);
+    variableExpr =
+        new VariableDeclarationExpr(new PrimitiveType(PrimitiveType.Primitive.Int), variableList);
+    bodyStatements.add(new ExpressionStmt(variableExpr));
 
-      String testVariable = instanceNameGen.next();
-      variableDecl =
-          new VariableDeclarator(
-              new VariableDeclaratorId(testVariable),
-              new ObjectCreationExpr(null, new ClassOrInterfaceType(testClass), null));
-      variableList = new ArrayList<>();
-      variableList.add(variableDecl);
-      variableExpr = new VariableDeclarationExpr(new ClassOrInterfaceType(testClass), variableList);
-      bodyStatements.add(new ExpressionStmt(variableExpr));
+    // >> if (args != null) { <<
+    IfStmt ifStmtArgs = new IfStmt();
+    ifStmtArgs.setCondition(
+        new BinaryExpr(new NameExpr("args"), new NullLiteralExpr(), BinaryExpr.Operator.notEquals));
 
-      int classMethodCount = classMethodCounts.get(testClass);
-      NameGenerator methodGen = new NameGenerator("test", 1, numDigits(classMethodCount));
+    List<Statement> guardIfThenStatements = new ArrayList<>();
 
-      while (methodGen.nameCount() < classMethodCount) {
-        if (beforeEachBody != null) {
-          bodyStatements.add(
-              new ExpressionStmt(
-                  new MethodCallExpr(new NameExpr(testVariable), BEFORE_EACH_METHOD)));
-        }
-        String methodName = methodGen.next();
-
-        TryStmt tryStmt = new TryStmt();
-        List<Statement> tryStatements = new ArrayList<>();
-        tryStatements.add(
-            new ExpressionStmt(new MethodCallExpr(new NameExpr(testVariable), methodName)));
-        BlockStmt tryBlock = new BlockStmt();
-
-        tryBlock.setStmts(tryStatements);
-        tryStmt.setTryBlock(tryBlock);
-        CatchClause catchClause = new CatchClause();
-        catchClause.setParam(
-            new Parameter(new ClassOrInterfaceType("Throwable"), new VariableDeclaratorId("e")));
-        BlockStmt catchBlock = new BlockStmt();
-        List<Statement> catchStatements = new ArrayList<>();
-        catchStatements.add(
+    // >> if (args.length >= 1) <<
+    // >>   limitTests = Integer.valueOf(args[0]); <<
+    IfStmt ifStmtArgsLength =
+        new IfStmt(
+            new BinaryExpr(
+                new FieldAccessExpr(new NameExpr("args"), "length"),
+                new IntegerLiteralExpr(Integer.toString(1)),
+                BinaryExpr.Operator.greaterEquals),
             new ExpressionStmt(
                 new AssignExpr(
-                    new NameExpr(failureVariableName),
-                    new BooleanLiteralExpr(true),
-                    AssignExpr.Operator.assign)));
-        catchStatements.add(
-            new ExpressionStmt(new MethodCallExpr(new NameExpr("e"), "printStackTrace")));
+                    new NameExpr(limitTestsVariableName),
+                    new MethodCallExpr(
+                        new NameExpr("Integer"),
+                        "valueOf",
+                        Collections.singletonList(
+                            new ArrayAccessExpr(
+                                new NameExpr("args"),
+                                new IntegerLiteralExpr(Integer.toString(0))))),
+                    AssignExpr.Operator.assign)),
+            null);
+    guardIfThenStatements.add(ifStmtArgsLength);
 
-        catchBlock.setStmts(catchStatements);
-        catchClause.setCatchBlock(catchBlock);
-        List<CatchClause> catches = new ArrayList<>();
-        catches.add(catchClause);
-        tryStmt.setCatchs(catches);
-        bodyStatements.add(tryStmt);
+    // >> if (args.length >= 2) <<
+    // >>   isIsolated = Boolean.valueOf(args[1]); <<
+    ifStmtArgsLength =
+        new IfStmt(
+            new BinaryExpr(
+                new FieldAccessExpr(new NameExpr("args"), "length"),
+                new IntegerLiteralExpr(Integer.toString(2)),
+                BinaryExpr.Operator.greaterEquals),
+            new ExpressionStmt(
+                new AssignExpr(
+                    new NameExpr(isIsolatedVariableName),
+                    new MethodCallExpr(
+                        new NameExpr("Boolean"),
+                        "valueOf",
+                        Collections.singletonList(
+                            new ArrayAccessExpr(
+                                new NameExpr("args"),
+                                new IntegerLiteralExpr(Integer.toString(1))))),
+                    AssignExpr.Operator.assign)),
+            null);
+    guardIfThenStatements.add(ifStmtArgsLength);
 
-        if (afterEachBody != null) {
-          bodyStatements.add(
-              new ExpressionStmt(
-                  new MethodCallExpr(new NameExpr(testVariable), AFTER_EACH_METHOD)));
-        }
-      }
+    // >> if (args.length >= 3) <<
+    // >>   threadId = Integer.valueOf(args[2]); <<
+    ifStmtArgsLength =
+        new IfStmt(
+            new BinaryExpr(
+                new FieldAccessExpr(new NameExpr("args"), "length"),
+                new IntegerLiteralExpr(Integer.toString(3)),
+                BinaryExpr.Operator.greaterEquals),
+            new ExpressionStmt(
+                new AssignExpr(
+                    new NameExpr(threadIdVariableName),
+                    new MethodCallExpr(
+                        new NameExpr("Integer"),
+                        "valueOf",
+                        Collections.singletonList(
+                            new ArrayAccessExpr(
+                                new NameExpr("args"),
+                                new IntegerLiteralExpr(Integer.toString(2))))),
+                    AssignExpr.Operator.assign)),
+            null);
+    guardIfThenStatements.add(ifStmtArgsLength);
 
-      if (afterAllBody != null) {
-        bodyStatements.add(
-            new ExpressionStmt(new MethodCallExpr(new NameExpr(testClass), AFTER_ALL_METHOD)));
-      }
-    }
+    // >> } // end if (args != null) <<
+    BlockStmt guardIfThenBlock = new BlockStmt(guardIfThenStatements);
+    ifStmtArgs.setThenStmt(guardIfThenBlock);
+    bodyStatements.add(ifStmtArgs);
 
+    // Create test drivers
+    String testDriverMethodName = "testDriver";
+    String testIdVariableName = "testId";
+    NameGenerator instanceNameGen = new NameGenerator("t");
+    List<MethodDeclaration> testDriverMethods =
+        createTestDriverLevel(
+            0,
+            0,
+            new ArrayList<>(testClassMethodNames),
+            testDriverMethodName,
+            instanceNameGen,
+            testIdVariableName);
+
+    // >> boolean hasFailure = false; <<
+    String failureVariableName = "hadFailure";
+    variableDecl =
+        new VariableDeclarator(
+            new VariableDeclaratorId(failureVariableName), new BooleanLiteralExpr(false));
+    variableList = new ArrayList<>();
+    variableList.add(variableDecl);
+    variableExpr =
+        new VariableDeclarationExpr(
+            new PrimitiveType(PrimitiveType.Primitive.Boolean), variableList);
+    bodyStatements.add(new ExpressionStmt(variableExpr));
+
+    // (template<$i> run_test)
+    // >> try { $testDriverMethod($i % #$testClassMethodNames); } catch (Throwable e) { hasFailure = true; } <<
+    Function<String, Statement> tryTestDriverMethodTemplate =
+        i ->
+            new TryStmt(
+                new BlockStmt(
+                    Collections.singletonList(
+                        new ExpressionStmt(
+                            new MethodCallExpr(
+                                null,
+                                testDriverMethodName,
+                                Collections.singletonList(
+                                    new BinaryExpr(
+                                        new NameExpr(i),
+                                        new IntegerLiteralExpr(
+                                            Integer.toString(testClassMethodNames.size())),
+                                        BinaryExpr.Operator.remainder)))))),
+                Collections.singletonList(
+                    new CatchClause(
+                        new Parameter(
+                            new ClassOrInterfaceType("Throwable"), new VariableDeclaratorId("e")),
+                        new BlockStmt(
+                            Stream.of(
+                                    new ExpressionStmt(
+                                        new AssignExpr(
+                                            new NameExpr(failureVariableName),
+                                            new BooleanLiteralExpr(true),
+                                            AssignExpr.Operator.assign)))
+                                .collect(Collectors.toList())))),
+                null);
+
+    // >> if (isIsolated) { <<
+    IfStmt ifStmtIsIsolated = new IfStmt();
+    ifStmtIsIsolated.setCondition(new NameExpr(isIsolatedVariableName));
+
+    // >>   if (threadId < limitTests) { <<
+    IfStmt ifStmtThreadId = new IfStmt();
+    ifStmtThreadId.setCondition(
+        new BinaryExpr(
+            new NameExpr(threadIdVariableName),
+            new NameExpr(limitTestsVariableName),
+            BinaryExpr.Operator.less));
+
+    // >>     $run_test(threadId); <<
+    ifStmtThreadId.setThenStmt(
+        new BlockStmt(
+            Collections.singletonList(tryTestDriverMethodTemplate.apply(threadIdVariableName))));
+
+    ifStmtIsIsolated.setThenStmt(new BlockStmt(Collections.singletonList(ifStmtThreadId)));
+
+    // >> } else {
+    // >>   for (i=0; i<limitTests; ++i) {
+    ForStmt forStmt = new ForStmt();
+    String forVariable = "i";
+    variableDecl =
+        new VariableDeclarator(
+            new VariableDeclaratorId(forVariable), new IntegerLiteralExpr(Integer.toString(0)));
+    variableList = new ArrayList<>();
+    variableList.add(variableDecl);
+    variableExpr =
+        new VariableDeclarationExpr(new PrimitiveType(PrimitiveType.Primitive.Int), variableList);
+    forStmt.setInit(Collections.singletonList(variableExpr));
+
+    forStmt.setCompare(
+        new BinaryExpr(
+            new NameExpr(forVariable),
+            new NameExpr(limitTestsVariableName),
+            BinaryExpr.Operator.less));
+
+    forStmt.setUpdate(
+        Collections.singletonList(
+            new UnaryExpr(new NameExpr(forVariable), UnaryExpr.Operator.preIncrement)));
+
+    // >>     $run_test(i); <<
+    forStmt.setBody(
+        new BlockStmt(Collections.singletonList(tryTestDriverMethodTemplate.apply(forVariable))));
+
+    ifStmtIsIsolated.setElseStmt(new BlockStmt(Collections.singletonList(forStmt)));
+    bodyStatements.add(ifStmtIsIsolated);
+
+    // >> if (hasFailure) { System.exit(1); } <<
     BlockStmt exitCall = new BlockStmt();
     List<Expression> args = new ArrayList<>();
     args.add(new IntegerLiteralExpr("1"));
@@ -490,17 +695,182 @@ public class JUnitCreator {
     BlockStmt body = new BlockStmt();
     body.setStmts(bodyStatements);
     mainMethod.setBody(body);
-    List<BodyDeclaration> bodyDeclarations = new ArrayList<>();
-    bodyDeclarations.add(mainMethod);
+    testDriverMethods.add(mainMethod);
+    return testDriverMethods;
+  }
 
-    ClassOrInterfaceDeclaration driverClass =
-        new ClassOrInterfaceDeclaration(Modifier.PUBLIC, false, driverName);
-    driverClass.setMembers(bodyDeclarations);
+  private static final int MAX_TESTS_IN_ONE_METHOD = 10;
+  private static final double LOG10_MAX_TESTS_IN_ONE_METHOD = Math.log10(MAX_TESTS_IN_ONE_METHOD);
 
-    List<TypeDeclaration> types = new ArrayList<>();
-    types.add(driverClass);
-    compilationUnit.setTypes(types);
-    return compilationUnit.toString();
+  // For create sub methods of the test driver, which uses a tree structure to find the correct test to invoke.
+  // Each method has a switch statement which has at most {@link #MAX_TESTS_IN_ONE_METHOD} branches.
+  private List<MethodDeclaration> createTestDriverLevel(
+      int testIdBeg,
+      int level,
+      List<Pair<String, String>> testClassMethodNames,
+      String methodName,
+      NameGenerator instanceNameGen,
+      String testIdVariableName) {
+    List<MethodDeclaration> testDriverMethods = new ArrayList<>();
+    MethodDeclaration thisLevelMethod =
+        new MethodDeclaration(Modifier.PUBLIC | Modifier.STATIC, new VoidType(), methodName);
+    List<Parameter> parameters =
+        Collections.singletonList(
+            new Parameter(
+                new ClassOrInterfaceType("int"), new VariableDeclaratorId(testIdVariableName)));
+    thisLevelMethod.setParameters(parameters);
+    thisLevelMethod.setThrows(
+        Collections.singletonList(new ReferenceType(new ClassOrInterfaceType("Throwable"))));
+
+    List<Statement> bodyStatements = new ArrayList<>();
+    SwitchStmt switchStmt = new SwitchStmt();
+    List<SwitchEntryStmt> switchEntryStatements = new ArrayList<>();
+
+    int testId = testIdBeg;
+
+    if (testClassMethodNames.size() > MAX_TESTS_IN_ONE_METHOD) {
+      // test size > MAX_TESTS_IN_ONE_METHOD: switch-branch to next level
+      int testsPerMethodNextLevel =
+          (int)
+              Math.pow(
+                  MAX_TESTS_IN_ONE_METHOD,
+                  Math.ceil(
+                      Math.log10(testClassMethodNames.size()) / LOG10_MAX_TESTS_IN_ONE_METHOD - 1));
+
+      // >> switch (testId / ?testsPerMethodNextLevel) { <<
+      switchStmt.setSelector(
+          new BinaryExpr(
+              new NameExpr(testIdVariableName),
+              new IntegerLiteralExpr(Integer.toString(testsPerMethodNextLevel)),
+              BinaryExpr.Operator.divide));
+
+      ArrayList<Pair<String, String>> testClassNameArrayList =
+          new ArrayList<>(testClassMethodNames);
+      int nextLevelIdx = 0;
+      NameGenerator nextLevelTestDriverNameGen = new NameGenerator(methodName + "_");
+      while (testId - testIdBeg < testClassNameArrayList.size()) {
+        List<Pair<String, String>> nextLevelTestClassMethodNames =
+            testClassNameArrayList.subList(
+                testId - testIdBeg,
+                Math.min(
+                    testId - testIdBeg + testsPerMethodNextLevel, testClassNameArrayList.size()));
+        String nextLevelMethodName = nextLevelTestDriverNameGen.next();
+        List<MethodDeclaration> nextLevelMethods =
+            createTestDriverLevel(
+                testId,
+                level + 1,
+                nextLevelTestClassMethodNames,
+                nextLevelMethodName,
+                instanceNameGen,
+                testIdVariableName);
+        testDriverMethods.addAll(nextLevelMethods);
+
+        // >> case ?testIdBeg/?testsPerMethodNextLevel + ?nextLevelIdx: nextLevelMethodName(testId); return; <<
+        SwitchEntryStmt switchEntryStmt =
+            new SwitchEntryStmt(
+                new IntegerLiteralExpr(
+                    Integer.toString(testIdBeg / testsPerMethodNextLevel + nextLevelIdx)),
+                Stream.of(
+                        new ExpressionStmt(
+                            new MethodCallExpr(
+                                null,
+                                nextLevelMethodName,
+                                Collections.singletonList(new NameExpr(testIdVariableName)))),
+                        new ReturnStmt())
+                    .collect(Collectors.toList()));
+        switchEntryStatements.add(switchEntryStmt);
+        nextLevelIdx++;
+        testId += testsPerMethodNextLevel;
+      }
+    } else {
+      // Reusable variables
+      VariableDeclarator variableDecl;
+      List<VariableDeclarator> variableList;
+      VariableDeclarationExpr variableExpr;
+
+      // >> switch (testId) { <<
+      switchStmt.setSelector(new NameExpr(testIdVariableName));
+
+      for (Pair<String, String> testClassMethodName : testClassMethodNames) {
+        String testClassName = testClassMethodName.getLeft();
+        String testMethodName = testClassMethodName.getRight();
+
+        // tests size <= MAX_TESTS_IN_ONE_METHOD: generate all tests in a switch-branch
+        SwitchEntryStmt switchEntryStmt = new SwitchEntryStmt();
+
+        // >> case $0: <<
+        switchEntryStmt.setLabel(new IntegerLiteralExpr(Integer.toString(testId)));
+
+        List<Statement> caseStatements = new ArrayList<>();
+
+        // BeforeAll
+        if (beforeAllBody != null) {
+          caseStatements.add(
+              new ExpressionStmt(
+                  new MethodCallExpr(new NameExpr(testClassName), BEFORE_ALL_METHOD)));
+        }
+
+        // >> RegressionTest$0 t$0 = new RegressionTest$0(); <<
+        String testVariable = instanceNameGen.next();
+        variableDecl =
+            new VariableDeclarator(
+                new VariableDeclaratorId(testVariable),
+                new ObjectCreationExpr(null, new ClassOrInterfaceType(testClassName), null));
+        variableList = new ArrayList<>();
+        variableList.add(variableDecl);
+        variableExpr =
+            new VariableDeclarationExpr(new ClassOrInterfaceType(testClassName), variableList);
+        caseStatements.add(new ExpressionStmt(variableExpr));
+
+        // BeforeEach
+        if (beforeEachBody != null) {
+          caseStatements.add(
+              new ExpressionStmt(
+                  new MethodCallExpr(new NameExpr(testVariable), BEFORE_EACH_METHOD)));
+        }
+
+        // PN: The following commented-out code is for debugging only
+        // // >> System.out.println("t$0"); <<
+        // caseStatements.add(
+        //     new ExpressionStmt(new MethodCallExpr(new NameExpr("System.out"), "println",
+        //         Collections.singletonList(new StringLiteralExpr("t" + testId)))));
+
+        // >> t$0.test$(($0+1))(); <<
+        caseStatements.add(
+            new ExpressionStmt(new MethodCallExpr(new NameExpr(testVariable), testMethodName)));
+
+        // AfterEach
+        if (afterEachBody != null) {
+          caseStatements.add(
+              new ExpressionStmt(
+                  new MethodCallExpr(new NameExpr(testVariable), AFTER_EACH_METHOD)));
+        }
+
+        // AfterAll
+        if (afterAllBody != null) {
+          caseStatements.add(
+              new ExpressionStmt(
+                  new MethodCallExpr(new NameExpr(testClassName), AFTER_ALL_METHOD)));
+        }
+
+        // >> return; <<
+        caseStatements.add(new ReturnStmt());
+
+        switchEntryStmt.setStmts(caseStatements);
+        switchEntryStatements.add(switchEntryStmt);
+        testId++;
+      }
+    }
+
+    // >> end switch <<
+    switchStmt.setEntries(switchEntryStatements);
+    bodyStatements.add(switchStmt);
+
+    BlockStmt body = new BlockStmt();
+    body.setStmts(bodyStatements);
+    thisLevelMethod.setBody(body);
+    testDriverMethods.add(thisLevelMethod);
+    return testDriverMethods;
   }
 
   public static BlockStmt parseFixture(List<String> bodyText) throws ParseException {
