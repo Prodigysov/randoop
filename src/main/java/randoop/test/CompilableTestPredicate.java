@@ -3,6 +3,7 @@ package randoop.test;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.PackageDeclaration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.function.Predicate;
 import randoop.ExceptionalExecution;
@@ -52,6 +53,8 @@ public class CompilableTestPredicate implements Predicate<ExecutableSequence> {
     options.add("-g:none");
     // no warnings:
     options.add("-Xlint:none");
+    // pass the current classpath as additional classpath
+    options.addAll(Arrays.asList("-classpath", System.getProperty("java.class.path")));
     this.compiler = new SequenceCompiler(sequenceClassLoader, options);
     this.junitCreator = junitCreator;
     this.nameGenerator = new NameGenerator("RandoopTemporarySeqTest");
@@ -88,6 +91,10 @@ public class CompilableTestPredicate implements Predicate<ExecutableSequence> {
       }
       genTests.countSequenceCompileFailure();
     }
+    // PN: The following commented out code is for debugging only
+    // if (!result) {
+    //   System.out.println("Does not compile: \n" + source.toString());
+    // }
     return result;
   }
 
