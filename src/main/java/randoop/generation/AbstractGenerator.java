@@ -396,12 +396,13 @@ public abstract class AbstractGenerator {
     List<ExecutableSequence> unique_seqs = new ArrayList<>();
     Set<Sequence> subsumed_seqs = this.getSubsumedSequences();
     for (ExecutableSequence es : outRegressionSeqs) {
-      if (!subsumed_seqs.contains(es.sequence)) {
-        operationHistory.add(es.getOperation(), OperationOutcome.REGRESSION_SEQUENCE);
-        unique_seqs.add(es);
-      } else {
-        operationHistory.add(es.getOperation(), OperationOutcome.SUBSUMED);
-      }
+      // PN: Disable subsumed sequence detection in order that the output number of tests matches the "output-limit" option
+      // if (!subsumed_seqs.contains(es.sequence)) {
+      operationHistory.add(es.getOperation(), OperationOutcome.REGRESSION_SEQUENCE);
+      unique_seqs.add(es);
+      // } else {
+      //   operationHistory.add(es.getOperation(), OperationOutcome.SUBSUMED);
+      // }
     }
     return unique_seqs;
   }
