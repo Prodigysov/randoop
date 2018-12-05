@@ -819,26 +819,28 @@ task updateUserOptions(dependsOn: 'assemble') {
 //     }
 // }
 
-// /*
-//  * Configuration of manual task to generate/update and move documentation into
-//  * build/docs directory.
-//  */
+/*
+ * Configuration of manual task to generate/update and move documentation into
+ * build/docs directory.
+ */
 // task manual(type: DefaultTask, dependsOn: [ 'updateUserOptions', 'updateUserTOC', 'updateDevTOC', 'html5validatorExists']) {
-//   group 'Documentation'
-//   description "Adds options and TOC to documentation in src/docs"
-//   doLast {
-//     exec {
-//       if (JavaVersion.current().isJava8Compatible()) {
-//         environment PATH: "$System.env.PATH"
-//         commandLine "html5validator", "--root", file("${projectDir}/src/docs/manual")
-//       } else {
-//         commandLine "echo","WARNING: HTML validation of manuals is only run in Java 8+"
-//       }
-//     }
-//   }
-// }
+task manual(type: DefaultTask, dependsOn: [ 'updateUserOptions', 'updateUserTOC', 'updateDevTOC']) {
+  group 'Documentation'
+  description "Adds options and TOC to documentation in src/docs"
+  doLast {
+    exec {
+      if (JavaVersion.current().isJava8Compatible()) {
+        environment PATH: "$System.env.PATH"
+        // commandLine "html5validator", "--root", file("${projectDir}/src/docs/manual")
+        commandLine "echo","WARNING: HTML validation is disabled"
+      } else {
+        commandLine "echo","WARNING: HTML validation of manuals is only run in Java 8+"
+      }
+    }
+  }
+}
 
-// build.dependsOn manual
+build.dependsOn manual
 
 // /*
 //  * Applies HTML5 validator to API javadoc.
