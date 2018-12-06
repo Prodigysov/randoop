@@ -16,22 +16,7 @@ import com.github.javaparser.ast.body.Parameter;
 import com.github.javaparser.ast.body.TypeDeclaration;
 import com.github.javaparser.ast.body.VariableDeclarator;
 import com.github.javaparser.ast.body.VariableDeclaratorId;
-import com.github.javaparser.ast.expr.AnnotationExpr;
-import com.github.javaparser.ast.expr.ArrayAccessExpr;
-import com.github.javaparser.ast.expr.AssignExpr;
-import com.github.javaparser.ast.expr.BinaryExpr;
-import com.github.javaparser.ast.expr.BooleanLiteralExpr;
-import com.github.javaparser.ast.expr.Expression;
-import com.github.javaparser.ast.expr.FieldAccessExpr;
-import com.github.javaparser.ast.expr.IntegerLiteralExpr;
-import com.github.javaparser.ast.expr.MarkerAnnotationExpr;
-import com.github.javaparser.ast.expr.MethodCallExpr;
-import com.github.javaparser.ast.expr.NameExpr;
-import com.github.javaparser.ast.expr.NullLiteralExpr;
-import com.github.javaparser.ast.expr.ObjectCreationExpr;
-import com.github.javaparser.ast.expr.SingleMemberAnnotationExpr;
-import com.github.javaparser.ast.expr.UnaryExpr;
-import com.github.javaparser.ast.expr.VariableDeclarationExpr;
+import com.github.javaparser.ast.expr.*;
 import com.github.javaparser.ast.stmt.BlockStmt;
 import com.github.javaparser.ast.stmt.CatchClause;
 import com.github.javaparser.ast.stmt.ExpressionStmt;
@@ -604,7 +589,8 @@ public class JUnitCreator {
     bodyStatements.add(new ExpressionStmt(variableExpr));
 
     // (template<$i> run_test)
-    // >> try { $testDriverMethod($i % #$testClassMethodNames); } catch (Throwable e) { hasFailure = true; } <<
+    // >> try { $testDriverMethod($i % #$testClassMethodNames); } <<
+    // >> catch (Throwable e) { System.out.format("Test %d failed%n"); e.printStacktrace(); hasFailure = true; } <<
     Function<String, Statement> tryTestDriverMethodTemplate =
         i ->
             new TryStmt(
@@ -626,6 +612,16 @@ public class JUnitCreator {
                             new ClassOrInterfaceType("Throwable"), new VariableDeclaratorId("e")),
                         new BlockStmt(
                             Stream.of(
+                                    new ExpressionStmt(
+                                        new MethodCallExpr(
+                                            new NameExpr("System.out"),
+                                            "format",
+                                            Stream.of(
+                                                    new StringLiteralExpr("Test %d failed%n"),
+                                                    new NameExpr(i))
+                                                .collect(Collectors.toList()))),
+                                    new ExpressionStmt(
+                                        new MethodCallExpr(new NameExpr("e"), "printStackTrace")),
                                     new ExpressionStmt(
                                         new AssignExpr(
                                             new NameExpr(failureVariableName),
