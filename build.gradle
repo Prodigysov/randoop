@@ -260,24 +260,24 @@ build.dependsOn compileAll
  *
  * Only works in Java 8+.
  */
-import net.ltgt.gradle.errorprone.ErrorProneToolChain
+// import net.ltgt.gradle.errorprone.ErrorProneToolChain
 
-tasks.withType(JavaCompile).each { t ->
-  if (JavaVersion.current().isJava8Compatible()) {
-    if (!t.name.equals("compileTestInputJava") && !t.name.startsWith("checkTypes")) {
-      t.toolChain ErrorProneToolChain.create(project)
-      t.options.compilerArgs += [
-        // Maybe NamedParameters is no longer supported?
-        // // undocumented, and suggestion seems bad
-	// '-Xep:NamedParameters:OFF',
- 	// Is always a false positive in my experience.
-	'-Xep:StringSplitter:OFF'
-        // TODO: uncomment once we run the Interning Checker on Randoop
-        // '-Xep:ReferenceEquality:OFF'
-        ]
-    }
-  }
-}
+// tasks.withType(JavaCompile).each { t ->
+//   if (JavaVersion.current().isJava8Compatible()) {
+//     if (!t.name.equals("compileTestInputJava") && !t.name.startsWith("checkTypes")) {
+//       t.toolChain ErrorProneToolChain.create(project)
+//       t.options.compilerArgs += [
+//         // Maybe NamedParameters is no longer supported?
+//         // // undocumented, and suggestion seems bad
+// 	// '-Xep:NamedParameters:OFF',
+//  	// Is always a false positive in my experience.
+// 	'-Xep:StringSplitter:OFF'
+//         // TODO: uncomment once we run the Interning Checker on Randoop
+//         // '-Xep:ReferenceEquality:OFF'
+//         ]
+//     }
+//   }
+// }
 
 
 /*
